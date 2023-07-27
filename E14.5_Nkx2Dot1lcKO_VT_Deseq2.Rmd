@@ -1,0 +1,521 @@
+---
+title: "E14.5 Nkx2.1-Dot1lcKO Ventral telencephalon RNA-seq DE analysis"
+output:
+  html_document: default
+  pdf_document: default
+date: '2022-10-04'
+---
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(knitr)
+# Set so that long lines in R will be wrapped:
+opts_chunk$set(tidy.opts=list(width.cutoff=80), tidy=TRUE)
+options(width = 80)
+```
+
+load packages
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(DESeq2)
+library(limma)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(EnhancedVolcano)
+
+library(reshape2)
+library(scales)
+library(plyr)
+library(pheatmap)
+```
+
+| Dataset name | genotype | sex    | litter | Sample name |
+|--------------|----------|--------|--------|-------------|
+| KO1          | KO       | MALE   | 3      | VT_7        |
+| KO2          | KO       | FEMALE | 2      | VT_6        |
+| WT1          | WT       | FEMALE | 2      | VT_5        |
+| WT2          | WT       | FEMALE | 2      | VT_4        |
+| WT3          | WT       | MALE   | 1      | VT_2        |
+| KO3          | KO       | FEMALE | 1      | VT_3        |
+| WT4          | WT       | MALE   | 1      | VT_1        |
+| WT5          | WT       | MALE   | 3      | VT_10       |
+| KO4          | KO       | FEMALE | 3      | VT_8        |
+| KO5          | KO       | MALE   | 3      | VT_9        |
+
+: Nkx2.1_Dot1lcKO E14.5 ventral telencephalon (VT) RNA-seq sample metadata
+
+------------------------------------------------------------------------
+
+load raw count matrix from featurecounts (Galaxy) and analysis design file
+```{r}
+nkxdot.featurecount<-read.table(
+    "C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/Galaxy338-[nkx2.1_Dot1lcKO_featurecount_matrix].tabular", 
+    header=TRUE, 
+    sep="\t", 
+    quote="",
+    fill=TRUE, 
+    row.names = "Geneid") 
+#this is from running featurecounts on each dataset and joining them in one dataset
+#featurecounts parameters: 
+# -s  0  -Q  10  -t 'exon' -g 'gene_id'  --minOverlap  1 --fracOverlap 0 --fracOverlapFeature 0 -p  -C 
+
+nkxdot.info<-read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/nkx2dot1lcko_deseq2_design.txt",
+    header=TRUE, 
+    sep="\t", 
+    quote="", 
+    fill=FALSE, 
+    row.names = 1) 
+
+# this is just a text file generated in notepad specifying properties of the datasets
+#metadata
+nkxdot.info$sex<-factor(nkxdot.info$sex) 
+nkxdot.info$genotype<-factor(nkxdot.info$genotype)
+nkxdot.info$litter<-factor(nkxdot.info$litter) 
+#sex, litter and genotype columns were character class 
+#this converts them to factors (what DESEq2 needs).
+```
+Create DESeq2 dataset from the above input
+```{r}
+nkxdot.featurecount <- nkxdot.featurecount[, rownames(nkxdot.info)] 
+all(rownames(nkxdot.info) == colnames(nkxdot.featurecount)) 
+#this makes sure rownames of the design are the same as column names of the count matrix.
+
+nkxdot.dds <- DESeqDataSetFromMatrix(countData = nkxdot.featurecount,
+                                     colData = nkxdot.info,
+                                     design = ~ sex + litter + genotype) 
+#this generates the Deseq2 dataset (dds), which will be used for PCA plots, 
+#count normalisation,batch removal and DE analysis, etc. simply for everything downstream :) 
+
+nkxdot.dds
+```
+
+Normalise counts (VST) and create PCA plot to explore data
+```{r}
+vsd<-vst(nkxdot.dds) 
+#count normalisation (Variance stabilising transformation; VST)
+nkxdot_beforecorrection_PCA<-plotPCA(vsd,
+                                    intgroup=c("genotype", "sex", "litter"))
+
+print(nkxdot_beforecorrection_PCA)
+dev.off()
+nkxdot_beforecorrection_PCA
+#plot PCA and label the datasets according to genotype, sex and litter
+```
+
+-   As can be seen from the PCA plot, the datasets separate mainly by sex (male vs. female; PC1) rather than the genotype. There is a strong sex and litter (batch) bias in the data. We need to see the data when sex and litter effects are removed.
+
+use limma to do batch correction
+```{r}
+mat <- assay(vsd)
+#create a matrix from VST-normalised counts for limma
+mm <- model.matrix(~genotype, colData(vsd)) 
+#define the model for limma, her we chose ~genotype, because that is the main factor we are interested in.
+mat <- limma::removeBatchEffect(mat, batch=vsd$sex, batch2= vsd$litter, design=mm) 
+#remove the batch effect (variation) coming from sex and litter of the samples. this is saved over the initial matrix (mat).
+#this is the normalised batch-corrected counts now.
+counts.after.batchcorrection<-mat
+#rename mat to something more intuitive for later count table
+assay(vsd) <- mat 
+#rewrite mat to run plotPCA on it
+
+nkxdot_aftercorrection_PCA<-plotPCA(vsd,
+                                    intgroup=c("genotype", "sex", "litter")) 
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/nkxdot_aftercorrection_PCA.pdf",
+    width=4, height=5)
+print(nkxdot_aftercorrection_PCA)
+dev.off()
+
+#PCA plot with the sex and litter variances removed.
+```
+
+-   Now the sex and litter biases are gone. However, this reveals some undesired variation in WT:m:1 (purple) dataset that clusters with KO datasets. Removing this dataset is justified (OUTLIER).
+
+Remove #WT4 (outlier) from the count matrix and design file
+```{r}
+#remove WT4
+nkxdot.featurecount.rm <- as.matrix((nkxdot.featurecount[,-7]),
+                                    sep="\t", 
+                                    row.names="Geneid") 
+#remove info of WT4
+nkxdot.info.rm<-nkxdot.info[-7,] 
+nkxdot.featurecount.rm <- nkxdot.featurecount.rm[, rownames(nkxdot.info.rm)]
+#create a new deseq2 dataset without WT4 dataset. rm for "dataset removed"
+all(rownames(nkxdot.info.rm) == colnames(nkxdot.featurecount.rm))
+nkxdot.rm.dds <- DESeqDataSetFromMatrix(countData = nkxdot.featurecount.rm,
+                                        colData = nkxdot.info.rm,
+                                        design = ~ sex + litter + genotype)
+nkxdot.rm.dds
+```
+
+re-plot the PCA with the new count matrix (rm) after batch correction
+```{r}
+vsd.rm<-vst(nkxdot.rm.dds)
+mat.rm <- assay(vsd.rm) 
+#create a matrix from VST-normalised counts for limma
+mm.rm <- model.matrix(~genotype, 
+                      colData(vsd.rm)) 
+#define the model for limma, her we chose ~genotype, because that is the main factor we are interested in.
+mat.rm <- limma::removeBatchEffect(mat.rm, 
+                                   batch=vsd.rm$sex, 
+                                   batch2= vsd.rm$litter, 
+                                   design=mm.rm) 
+#remove the batch effect (variation) coming from sex and litter of the samples. this is saved over the initial matrix (mat).this is the normalised batch-corrected counts now.
+counts.after.batchcorrection<-mat.rm 
+#rename mat to something more intuitive for later count table
+assay(vsd.rm) <- mat.rm 
+#rewrite mat to run plotPCA on it
+
+plotPCA(vsd.rm, intgroup=c("genotype", "sex", "litter")) 
+#PCA plot with the sex and litter variances removed.
+```
+
+-   With the WT4 dataset removed, there is better separation of WT and KO clusters.
+-   There is still more variability among KO datasets.
+-   Now the dataset is ready to run DESEQ2 Differential expression analysis.
+
+Save the VST-normalised counts without WT4 and batch effects
+```{r}
+entrezid.counts<-row.names(counts.after.batchcorrection) #get ENTREZIDs
+rownames(counts.after.batchcorrection)<-NULL #remove rownames
+counts.after.batchcorrection.df<-cbind(entrezid.counts,
+                                       counts.after.batchcorrection) 
+#join ENTREZIDs and the count table so that the entrezids are another column
+counts.after.batchcorrection.df<-as.data.frame(counts.after.batchcorrection.df) 
+nkxdot.counts.after.batchcorrection.symbol<-bitr(counts.after.batchcorrection.df$entrezid.counts, 
+                                                 fromType = "ENTREZID",
+                                                 toType = "SYMBOL",
+                                                 OrgDb = org.Mm.eg.db,
+                                                 drop = FALSE) #translate ENTREZID to GENE SYMBOL
+
+nkxdot.counts.after.batchcorrection.symbol.df<-cbind(nkxdot.counts.after.batchcorrection.symbol, 
+                                                     counts.after.batchcorrection.df) 
+#join GENE SYMBOLs with the count table
+
+write.table(nkxdot.counts.after.batchcorrection.symbol.df, 
+            file = "C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_vt_vst_counts_batchcorrected.txt",
+            sep = '\t', 
+            quote = FALSE,)
+#save the count table as tab-deliminated file
+```
+
+Run differential expression (DE) analysis with DESEQ2
+```{r}
+nkxdot.deseq<-DESeq(nkxdot.rm.dds) #DE analysis
+
+res.nkxdot.vt<- results(nkxdot.deseq,
+                        contrast = c("genotype", "KO", "WT")) 
+#specify the parameters of the results. We want the DE genes depending on genotype between KO vs. WT.
+res.nkxdot.vt.df<-as.data.frame(res.nkxdot.vt) 
+#this gives the DE table with log2FC and padj etc values.
+
+entrezid<-row.names(res.nkxdot.vt.df)
+rownames(res.nkxdot.vt.df)<-NULL
+res.nkxdot.vt.df<-cbind(entrezid, 
+                        res.nkxdot.vt.df)
+# as before, creating a entrezid column in the DE results table
+
+nkxdot.deseq.symbol<-bitr(res.nkxdot.vt.df$entrezid,
+                          fromType = "ENTREZID",
+                          toType = "SYMBOL",
+                          OrgDb = org.Mm.eg.db,
+                          drop = FALSE) 
+# translate entrezids of DEGs to gene symbol
+
+res.nkxdot.vt.df<-cbind(nkxdot.deseq.symbol, 
+                        res.nkxdot.vt.df) 
+# add the gene symbols to the DE table
+res.nkxdot.vt.df_sorted = res.nkxdot.vt.df[order(res.nkxdot.vt.df$padj),]
+# sort the DE table by ascending padj values
+write.table(res.nkxdot.vt.df_sorted, 
+            file="C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_vt_batchcorrected_deseq2_symbol_padjsorted.txt", 
+            sep = "\t",
+            quote = FALSE,)
+
+res.nkxdot.vt.df_padj0.1 = res.nkxdot.vt.df[(res.nkxdot.vt.df$padj<=0.1) & 
+                                                (is.na(res.nkxdot.vt.df$padj)==FALSE),]
+# filter the DE table to include the genes with padj value smaller than 0.1
+write.table(res.nkxdot.vt.df_padj0.1,
+            file="C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_vt_batchcorrected_deseq2_symbol_padjcutoff.txt",
+            sep = "\t",
+            quote = FALSE,)
+
+res.nkxdot.vt.shrink<-lfcShrink(nkxdot.deseq, 
+                                contrast = c("genotype", "KO", "WT"), 
+                                res = res.nkxdot.vt, type ="normal" ) # Shrink the log2FC (LFC) values
+res.nkxdot.vt.shrink.df<-as.data.frame(res.nkxdot.vt.shrink)
+
+entrezid<-row.names(res.nkxdot.vt.shrink.df)
+rownames(res.nkxdot.vt.shrink.df)<-NULL
+res.nkxdot.vt.shrink.df<-cbind(entrezid, res.nkxdot.vt.shrink.df)
+
+nkxdot.deseq.shrink.symbol<-bitr(res.nkxdot.vt.shrink.df$entrezid, 
+                                 fromType = "ENTREZID",
+                                 toType = "SYMBOL",
+                                 OrgDb = org.Mm.eg.db,
+                                 drop = FALSE) # translate entrezids of DEGs to gene symbol
+
+res.nkxdot.vt.shrink.df<-cbind(nkxdot.deseq.shrink.symbol,
+                               res.nkxdot.vt.shrink.df)
+res.nkxdot.vt.shrink.df<-res.nkxdot.vt.shrink.df[(is.na(res.nkxdot.vt.shrink.df$padj)==FALSE),]
+res.nkxdot.vt.shrink.df_sorted = res.nkxdot.vt.shrink.df[order(res.nkxdot.vt.shrink.df$padj),] 
+# sort the LFC shrunk DE table by ascending padj values
+write.table(res.nkxdot.vt.shrink.df_sorted,
+            file="C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_vt_batchcorrected_deseq2_shrink_symbol_padjsorted.txt", 
+            sep = "\t", 
+            quote = FALSE,)
+
+res.nkxdot.vt.shrink.df_padj0.1 = res.nkxdot.vt.shrink.df[(res.nkxdot.vt.shrink.df$padj<=0.1) & 
+                                                              (is.na(res.nkxdot.vt.shrink.df$padj)==FALSE),]  
+# filter the DE table to include the genes with padj value smaller than 0.1
+write.table(res.nkxdot.vt.shrink.df_padj0.1,
+            file="C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_vt_batchcorrected_deseq2_shrink_symbol_padjcutoff.txt", 
+            sep = "\t", 
+            quote = FALSE,)
+
+# combine normalised counts with deseq table to filter the count table by padj<0.01
+nkxdot.norm.counts.padj01<-merge(res.nkxdot.vt.df_padj0.1, 
+                                 counts.after.batchcorrection.df,
+                                 by.x="ENTREZID",
+                                 by.y="entrezid.counts")
+#filter padj<0.05
+nkxdot.norm.counts.padj005 = nkxdot.norm.counts.padj01[(nkxdot.norm.counts.padj01$padj<=0.05) & 
+                                                    (is.na(nkxdot.norm.counts.padj01$padj)==FALSE),]  
+
+
+write.table(nkxdot.norm.counts.padj01,
+            file="C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_vt_batchcorrected_norm_counts_padjcutoff.txt", 
+            sep = "\t", 
+            quote = FALSE,)
+
+```
+
+------------------------------------------------------------------------
+
+Volcano plot of DEGs from E14.5 Nkx2.1 Dot1lKO VT samples
+
+```{r, fig.width=6, fig.height=6}
+#get rid of NA padj values
+res.nkxdot.vt.shrink.df<-res.nkxdot.vt.shrink.df[(is.na(res.nkxdot.vt.shrink.df$SYMBOL)==FALSE),] 
+ #get rid of NA gene symbols
+row.names(res.nkxdot.vt.shrink.df) <- make.names(res.nkxdot.vt.shrink.df[,"SYMBOL"],TRUE)
+
+#color key
+keyvals_nkx<- ifelse(
+    abs(res.nkxdot.vt.shrink.df$log2FoldChange) > 0 & 
+        res.nkxdot.vt.shrink.df$padj<=0.1, 'indianred4',
+    ifelse('grey'))
+keyvals_nkx[is.na(keyvals_nkx)] <- 'grey'
+names(keyvals_nkx)[keyvals_nkx == 'indianred4'] <- 'mid'
+names(keyvals_nkx)[keyvals_nkx == 'grey'] <- 'low' 
+
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkx2_dot1lcko_vt_deseq2_shrink_volcanoplot.pdf", 
+    width=5,
+    height=7,
+    compress = TRUE)
+
+volcano_plot_nkxdot<- EnhancedVolcano(res.nkxdot.vt.shrink.df,
+                lab = rownames(res.nkxdot.vt.shrink.df), 
+                x = "log2FoldChange",
+                y = "padj",
+                xlab = bquote(~Log[2]~ 'fold change'),
+                ylab = bquote(~-Log[10]~italic(P)),
+                selectLab = rownames(res.nkxdot.vt.shrink.df)[which(names(keyvals_nkx) %in% c('mid'))],
+                axisLabSize = 12,
+                labSize = 3,
+                labCol = 'grey12',
+                labFace = 'plain',
+                boxedLabels = FALSE,
+                pointSize= 2.5,
+                pCutoff = 0.1,
+                FCcutoff = 0.58,
+                xlim=c(-0.8, 0.8),
+                ylim=c(0,-log10(10e-11)),
+                colAlpha = 1/2,
+                col = c("slategray", "slategray", "indianred", "dodgerblue4"),
+                                    colGradient = NULL,
+                                        shadeAlpha = 1/2,
+                                      shadeFill = 'grey',
+                                      shadeSize = 0.01,
+                                      shadeBins = 2,
+                                      vlineType = 'dashed',
+                                      vlineCol = 'black',
+                                      vlineWidth = 0.4,
+                                      hline = c(0.1),
+                                      hlineType = 'longdash',
+                                      hlineCol = 'black',
+                                      hlineWidth = 0.4,
+                                      gridlines.major = TRUE,
+                                      gridlines.minor = FALSE,
+                                      border = "full",
+                                      borderWidth = 0.8,
+                                      borderColour = "black",
+                                      drawConnectors=FALSE,
+                                      widthConnectors = 0.5)
+                print(volcano_plot_nkxdot)
+dev.off()
+volcano_plot_nkxdot
+```
+
+GO-term enrichment analysis
+```{r, fig.height=10, fig.width=6}
+#filter up- and down-regulated genes
+
+res.nkxdot.vt.shrink.df.up<- res.nkxdot.vt.shrink.df[(res.nkxdot.vt.shrink.df$log2FoldChange> 0 & 
+                                                          res.nkxdot.vt.shrink.df$padj<=0.05),]
+res.nkxdot.vt.shrink.df.down<- res.nkxdot.vt.shrink.df[(res.nkxdot.vt.shrink.df$log2FoldChange<0 & 
+                                                            res.nkxdot.vt.shrink.df$padj<=0.05),]
+
+# make a list of increased and decreased genes
+nkxdot.list<-list(increase=res.nkxdot.vt.shrink.df.up$ENTREZID,
+                  decrease=res.nkxdot.vt.shrink.df.down$ENTREZID)
+
+# run differential GO-term enrichment analysis
+
+nkxdot.compare<- compareCluster(geneClusters = nkxdot.list,
+                                fun = "enrichGO",
+                                OrgDb = "org.Mm.eg.db",
+                                keyType = "ENTREZID",
+                                ont = "BP",
+                                pAdjustMethod = "BH",
+                                qvalueCutoff = 0.05,
+                                pvalueCutoff = 0.05,
+                                readable = TRUE)
+# simplify terms to avoid redundancy
+nkxdot.compare.simp<-simplify(nkxdot.compare,
+         cutoff = 0.5,
+         by = "p.adjust",
+         select_fun = min,
+         measure = "Wang",
+         semData = NULL)
+# export the dataframe of GO enrichment results
+nkxdot.compare.df<-as.data.frame(nkxdot.compare)
+write.table(nkxdot.compare.df, 
+            file = "C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_GOterms.txt",
+            sep = "\t", 
+            quote = FALSE,)
+
+# export the dataframe of GO enrichment results (simplified)
+nkxdot.compare.simp.df<-as.data.frame(nkxdot.compare.simp)
+write.table(nkxdot.compare.simp.df, 
+            file = "C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_GOterms_simplified.txt",
+            sep = "\t",
+            quote = FALSE,)
+
+# Dotplot of differential GO terms 
+
+dp.nkxdot = dotplot(nkxdot.compare,
+             showCategory=12,
+             font.size=10,
+             )
+
+# Dotplot of differential GO terms simplified
+dp.nkxdot.simp = dotplot(nkxdot.compare.simp,
+             showCategory=12,
+             font.size=10,
+             )
+```
+GO term enrichment analysis of molecular functions
+```{r, fig.height=10, fig.width=6}
+#run differential GO-term enrichment analysis with molecular functions (MF)
+nkxdot.compare.mf<- compareCluster(geneClusters = nkxdot.list,
+                                fun = "enrichGO",
+                                OrgDb = "org.Mm.eg.db",
+                                keyType = "ENTREZID",
+                                ont = "MF",
+                                pAdjustMethod = "BH",
+                                qvalueCutoff = 0.05,
+                                pvalueCutoff = 0.05,
+                                readable = TRUE)
+#simplify terms to avoid redundancy
+nkxdot.compare.mf.simp<-simplify(nkxdot.compare.mf,
+         cutoff = 0.5,
+         by = "p.adjust",
+         select_fun = min,
+         measure = "Wang",
+         semData = NULL)
+
+# export the dataframe of GO enrichment results (MF)
+nkxdot.compare.mf.df<-as.data.frame(nkxdot.compare.mf)
+write.table(nkxdot.compare.mf.df, 
+            file = "C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_GOterms_MF.txt",
+            sep = "\t",
+            quote = FALSE,)
+
+# export the dataframe of GO enrichment results (MF, simplified)
+nkxdot.compare.mf.simp.df<-as.data.frame(nkxdot.compare.mf.simp)
+write.table(nkxdot.compare.mf.simp.df, 
+            file = "C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_GOterms_MF_simplified.txt",
+            sep = "\t", 
+            quote = FALSE,)
+
+# Dotplot of differential GO terms MF
+
+dp.nkxdot.mf = dotplot(nkxdot.compare.mf,
+             showCategory=12,
+             font.size=10,
+             )
+
+# Dotplot of differential GO terms MF simplified
+dp.nkxdot.mf.simp = dotplot(nkxdot.compare.mf.simp,
+             showCategory=12,
+             font.size=10,
+             )
+```
+export the plots
+```{r}
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/160123_nkxdot_diff_GO_analysis.pdf",
+    width=5,
+    height=8)
+print(dp.nkxdot)
+dev.off()
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_diff_GO_analysis_MF.pdf",
+    width=5, 
+    height=10)
+print(dp.nkxdot.mf)
+dev.off()
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/160123_nkxdot_diff_GO_analysis_simp.pdf", 
+    width=5, 
+    height=7)
+print(dp.nkxdot.simp)
+dev.off()
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_diff_GO_analysis_MF_simp.pdf",
+    width=5,
+    height=10)
+print(dp.nkxdot.mf.simp)
+dev.off()
+```
+### heatmap of norm counts of DEGs with padj<=0.05
+```{r, fig.align='center', fig.height=9, fig.width=5}
+nkxdot.norm.counts.padj005.df<- as.data.frame(nkxdot.norm.counts.padj005[,-(4:9)])
+nkxdot.norm.counts.padj005.df<- as.data.frame(nkxdot.norm.counts.padj005.df[,-c(1:2)])
+nkxdot.norm.counts.padj005.df<- nkxdot.norm.counts.padj005.df[!duplicated(nkxdot.norm.counts.padj005.df),]
+nkxdot.norm.counts.padj005.df$KO1<-as.numeric(nkxdot.norm.counts.padj005.df$KO1)
+nkxdot.norm.counts.padj005.df$KO2<-as.numeric(nkxdot.norm.counts.padj005.df$KO2)
+nkxdot.norm.counts.padj005.df$KO3<-as.numeric(nkxdot.norm.counts.padj005.df$KO3)
+nkxdot.norm.counts.padj005.df$KO4<-as.numeric(nkxdot.norm.counts.padj005.df$KO4)
+nkxdot.norm.counts.padj005.df$KO5<-as.numeric(nkxdot.norm.counts.padj005.df$KO5)
+nkxdot.norm.counts.padj005.df$WT1<-as.numeric(nkxdot.norm.counts.padj005.df$WT1)
+nkxdot.norm.counts.padj005.df$WT2<-as.numeric(nkxdot.norm.counts.padj005.df$WT2)
+nkxdot.norm.counts.padj005.df$WT3<-as.numeric(nkxdot.norm.counts.padj005.df$WT3)
+nkxdot.norm.counts.padj005.df$WT5<-as.numeric(nkxdot.norm.counts.padj005.df$WT5)
+
+rownames(nkxdot.norm.counts.padj005.df) <-nkxdot.norm.counts.padj005.df$entrezid
+nkxdot.norm.counts.padj005.df<- as.matrix(nkxdot.norm.counts.padj005.df[,-1])
+nkxdot.norm.counts.padj005.df.heatmap<- pheatmap(nkxdot.norm.counts.padj005.df,cluster_cols = T, 
+                                       border_color = "white", 
+                                       clustering_distance_rows = "euclidean", 
+                                       color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                       angle_col = 0, 
+                                       fontsize = 8, 
+                                       show_colnames = T, 
+                                       show_rownames = F,
+                                       scale = "row"
+                                        )
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/301222_nkxdot_vt_scaled_count_heatmap_padj01.pdf", 
+    width=5, 
+    height=8)
+print(nkxdot.norm.counts.padj005.df.heatmap)
+dev.off()
+```
+
+```{r}
+sessionInfo()
+```

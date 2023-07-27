@@ -1,0 +1,285 @@
+---
+title: "Interneuron heatmaps"
+output: html_document
+date: '2022-11-28'
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+library(pheatmap)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+```
+
+read in tables
+```{r}
+Nkx.foxg1.IN.intersection<- read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/Intersected DEG NkxVT-Foxg1_Intersection IN markers.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol")
+
+Nkx.foxg1.padj.intersection<- read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/Intersection DEGs NkxVT_Foxg1 padj 0.05.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol")
+
+Nkx.sst.pv.intersection<- read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/Nkx-vT_SST and PV markers for heatmap_annotated.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol")
+
+Nkx.postmit.intersection<- read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/Nkx-vT_Postmitotic neuronal markers for heatmap_.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol")
+Nkxdot.vt.progenitor<-read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/nkxdot-vt-progenitor markers.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol")
+
+Foxg1dot.in<-read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/221219 Foxg1 DEG IN markers Norm counts  - simplied.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol", dec = ".")
+
+
+morphogen<- read.table("C:/Users/ia1014/Downloads/Morphogens_heatmap.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol")
+
+```
+
+### heatmap of intersected DEGs in Nkx and Foxg1 DOT1L cKO models and interneuron markers
+```{r, fig.align='center', fig.height=5, fig.width=4}
+Nkx.foxg1.IN.intersection$Nkx.log2FoldChange<-as.numeric(gsub(",", ".", Nkx.foxg1.IN.intersection$Nkx.log2FoldChange))
+Nkx.foxg1.IN.intersection$Foxg1log2FoldChange<-as.numeric(gsub(",", ".", Nkx.foxg1.IN.intersection$Foxg1log2FoldChange))
+    
+Nkx.foxg1.IN.intersection<- as.matrix(Nkx.foxg1.IN.intersection)
+nkx.foxg1.IN.heatmap<- pheatmap(Nkx.foxg1.IN.intersection,
+                                cluster_cols = F, 
+                                border_color = "white", 
+                                cellwidth = 10,
+                                cellheight = 10,
+                                clustering_distance_rows = "euclidean",
+                                color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                angle_col = 45,
+                                fontsize = 8, 
+                                show_colnames = T, 
+                                show_rownames = T
+                                        )
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/281122_nkx_foxg1_interneuron_intersection_heatmap.pdf", 
+    width=4, 
+    height=4)
+print(nkx.foxg1.IN.heatmap)
+dev.off()
+```
+
+### heatmap of intersected DEGs in Nkx and Foxg1 DOT1L cKO models
+```{r, fig.align='center', fig.height=40, fig.width=4}
+Nkx.foxg1.padj.intersection$Nkx.log2FoldChange<-as.numeric(gsub(",", ".", Nkx.foxg1.padj.intersection$Nkx.log2FoldChange))
+Nkx.foxg1.padj.intersection$Foxg1log2FoldChange<-as.numeric(gsub(",", ".", Nkx.foxg1.padj.intersection$Foxg1log2FoldChange))
+    
+Nkx.foxg1.padj.intersection<- as.matrix(Nkx.foxg1.padj.intersection)
+nkx.foxg1.padj.heatmap<- pheatmap(Nkx.foxg1.padj.intersection,cluster_cols = F, 
+                                       border_color = "white", 
+                                         cellwidth = 6,
+                                        cellheight = 6,
+                                       clustering_distance_rows = "euclidean", 
+                                       color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                       angle_col = 45, 
+                                       fontsize = 7, show_colnames = T, show_rownames = T
+                                        )
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/201222_nkx_foxg1_padj_intersection_heatmap.pdf", 
+    width=4, 
+    height=14.5)
+print(nkx.foxg1.padj.heatmap)
+dev.off()
+```
+### GO-terms of the Nkx and Foxg1 Dot1l cKO models DEG intersection
+
+```{r}
+# run GO-term enrichment analysis
+nkx.foxg1.deg.list<-rownames(Nkx.foxg1.padj.intersection)
+nkx.foxg1.deg.list<-bitr(nkx.foxg1.deg.list, fromType = "SYMBOL", toType = "ENTREZID", drop = T, OrgDb = "org.Mm.eg.db")
+nkx.foxg1.intersection.GO<-enrichGO(nkx.foxg1.deg.list$ENTREZID, 
+                                     OrgDb = "org.Mm.eg.db", 
+                                     ont = "BP", 
+                                     pAdjustMethod = "BH", 
+                                     qvalueCutoff = 0.05,
+                                     pvalueCutoff = 0.05, 
+                                     readable = TRUE)
+# simplify terms to avoid redundancy
+nkx.foxg1.intersection.GO.simp <- simplify(nkx.foxg1.intersection.GO, 
+                                           cutoff = 0.5, 
+                                           by = "p.adjust", 
+                                           select_fun = min,
+                                           measure = "Wang",
+                                           semData = NULL)
+
+# Dotplot of differential GO terms
+
+dp.nkx.foxg1 = dotplot(nkx.foxg1.intersection.GO,
+                       showCategory = 12,
+                       font.size = 10 )
+dp.nkx.foxg1
+
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/nkx_foxg1_intersection_GOterms_BP.pdf",
+    width = 5, height = 5)
+print(dp.nkx.foxg1)
+dev.off()
+```
+
+### heatmap of intersected DEGs in Nkx DOt1lcKO and sst and PV markers
+```{r, fig.align='center', fig.height=20, fig.width=4}
+Nkx.sst.pv.intersection.df<-Nkx.sst.pv.intersection[, (4:12)]
+Nkx.sst.pv.annotation<-Nkx.sst.pv.intersection[,-(1:12)]
+Nkx.sst.pv.annotation<-as.data.frame(Nkx.sst.pv.annotation)
+Nkx.sst.pv.intersection.df$WT1<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$WT1))
+Nkx.sst.pv.intersection.df$WT2<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$WT2))
+Nkx.sst.pv.intersection.df$WT3<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$WT3))
+Nkx.sst.pv.intersection.df$WT5<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$WT5))
+Nkx.sst.pv.intersection.df$KO1<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$KO1))
+Nkx.sst.pv.intersection.df$KO2<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$KO2))
+Nkx.sst.pv.intersection.df$KO3<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$KO3))
+Nkx.sst.pv.intersection.df$KO4<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$KO4))
+Nkx.sst.pv.intersection.df$KO5<-as.numeric(gsub(",", ".", Nkx.sst.pv.intersection.df$KO5))
+rownames(Nkx.sst.pv.annotation)<-rownames(Nkx.sst.pv.intersection.df)
+Nkx.sst.pv.intersection.df<- as.matrix(Nkx.sst.pv.intersection.df)
+Nkx.sst.pv.intersection.heatmap<- pheatmap(Nkx.sst.pv.intersection.df,cluster_cols = F, 
+                                           annotation_row = Nkx.sst.pv.annotation,
+                                           annotation_names_row = F, cluster_rows = F,
+                                           border_color = "white", 
+                                         cellwidth = 10,
+                                        cellheight = 10,
+                                         color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                       angle_col = 45, 
+                                       fontsize = 8, show_colnames = T, show_rownames = T, scale = "row"
+                                        )
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/281122_nkx_sst_pv_marker_intersection_heatmap_clustered.pdf", 
+    width=4, 
+    height=5)
+print(Nkx.sst.pv.intersection.heatmap)
+dev.off()
+```
+
+### heatmap of intersected DEGs in Nkx DOt1lcKO and post-mitotic markers
+```{r, fig.align='center', fig.height=20, fig.width=4}
+Nkx.postmit.intersection<-Nkx.postmit.intersection[, (3:11)]
+Nkx.postmit.intersection$WT1<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$WT1))
+Nkx.postmit.intersection$WT2<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$WT2))
+Nkx.postmit.intersection$WT3<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$WT3))
+Nkx.postmit.intersection$WT5<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$WT5))
+Nkx.postmit.intersection$KO1<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$KO1))
+Nkx.postmit.intersection$KO2<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$KO2))
+Nkx.postmit.intersection$KO3<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$KO3))
+Nkx.postmit.intersection$KO4<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$KO4))
+Nkx.postmit.intersection$KO5<-as.numeric(gsub(",", ".", Nkx.postmit.intersection$KO5))
+
+Nkx.postmit.intersection<- as.matrix(Nkx.postmit.intersection)
+Nkx.postmit.intersection.heatmap<- pheatmap(Nkx.postmit.intersection,cluster_cols = F, 
+                                       border_color = "white", 
+                                         cellwidth = 10,
+                                        cellheight = 10,
+                                       clustering_distance_rows = "euclidean", 
+                                       color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                       angle_col = 45, 
+                                       fontsize = 8, show_colnames = T, show_rownames = T, scale = "row"
+                                        )
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/281122_nkx_postmit_intersection_heatmap.pdf", 
+    width=4, 
+    height=8)
+print(Nkx.postmit.intersection.heatmap)
+dev.off()
+```
+
+```{r}
+sessionInfo()
+```
+### heatmap of intersection of Nkxdot VT p0.05 DEGs and progenitor markers
+```{r}
+Nkxdot.vt.progenitor<-read.table("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/nkxdot-vt-progenitor markers.txt", 
+                                header=TRUE, sep="\t", quote="", fill=TRUE, row.names = "symbol")
+
+Nkxdot.vt.progenitor$WT1<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$WT1))
+Nkxdot.vt.progenitor$WT2<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$WT2))
+Nkxdot.vt.progenitor$WT3<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$WT3))
+Nkxdot.vt.progenitor$WT5<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$WT5))
+Nkxdot.vt.progenitor$KO1<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$KO1))
+Nkxdot.vt.progenitor$KO2<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$KO2))
+Nkxdot.vt.progenitor$KO3<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$KO3))
+Nkxdot.vt.progenitor$KO4<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$KO4))
+Nkxdot.vt.progenitor$KO5<-as.numeric(gsub(",", ".", Nkxdot.vt.progenitor$KO5))
+
+Nkxdot.vt.progenitor<- as.matrix(Nkxdot.vt.progenitor)
+Nkxdot.vt.progenitor.heatmap<- pheatmap(Nkxdot.vt.progenitor,
+                                        cluster_cols = F, 
+                                       border_color = "white", 
+                                         cellwidth = 10,
+                                        cellheight = 10,
+                                       cluster_rows = T,
+                                       clustering_distance_rows = "euclidean", 
+                                       color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                       angle_col = 45, 
+                                       fontsize = 8, show_colnames = T, show_rownames = T, scale = "row"
+                                        )
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/281122_nkxdot_progenitor_intersection_heatmap.pdf", 
+    width=4, 
+    height=4)
+print(Nkxdot.vt.progenitor.heatmap)
+dev.off()
+
+```
+### heatmap of intersected DEGs in Foxg1.dotcko and interneuron markers
+```{r, fig.align='center', fig.height=15, fig.width=4}
+Foxg1dot.in$WT1<-as.numeric(gsub(",", ".", Foxg1dot.in$WT1))
+Foxg1dot.in$WT2<-as.numeric(gsub(",", ".", Foxg1dot.in$WT2))
+Foxg1dot.in$WT3<-as.numeric(gsub(",", ".", Foxg1dot.in$WT3))
+Foxg1dot.in$WT4<-as.numeric(gsub(",", ".", Foxg1dot.in$WT4))
+Foxg1dot.in$WT5<-as.numeric(gsub(",", ".", Foxg1dot.in$WT5))
+Foxg1dot.in$KO1<-as.numeric(gsub(",", ".", Foxg1dot.in$KO1))
+Foxg1dot.in$KO2<-as.numeric(gsub(",", ".", Foxg1dot.in$KO2))
+Foxg1dot.in$KO3<-as.numeric(gsub(",", ".", Foxg1dot.in$KO3))
+Foxg1dot.in$KO4<-as.numeric(gsub(",", ".", Foxg1dot.in$KO4))
+Foxg1dot.in$KO5<-as.numeric(gsub(",", ".", Foxg1dot.in$KO5))
+Foxg1dot.in<- as.matrix(Foxg1dot.in)
+Foxg1dot.in.heatmap<- pheatmap(Foxg1dot.in,
+                                cluster_cols = F, 
+                                border_color = "white", 
+                                cellwidth = 10,
+                                cellheight = 10,
+                                scale = "row",
+                                clustering_distance_rows = "euclidean",
+                                color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                angle_col = 45,
+                                fontsize = 8, 
+                                show_colnames = T, 
+                                show_rownames = T
+                                        )
+pdf("C:/Users/ia1014/Downloads/nkx2creDot1lcKO_rnaseq/221222_foxg1_interneuron_intersection_heatmap.pdf", 
+    width=4, 
+    height=13)
+print(Foxg1dot.in.heatmap)
+dev.off()
+```
+
+```{r}
+### heatmap of intersected DEGs in Nkx DOt1lcKO and sst and PV markers
+
+morphogen<-morphogen[, (3:11)]
+morphogen<-morphogen[-c(15),]
+morphogen<-as.data.frame(morphogen)
+morphogen$WT1<-as.numeric(gsub(",", ".", morphogen$WT1))
+morphogen$WT2<-as.numeric(gsub(",", ".", morphogen$WT2))
+morphogen$WT3<-as.numeric(gsub(",", ".", morphogen$WT3))
+morphogen$WT5<-as.numeric(gsub(",", ".", morphogen$WT5))
+morphogen$KO1<-as.numeric(gsub(",", ".", morphogen$KO1))
+morphogen$KO2<-as.numeric(gsub(",", ".", morphogen$KO2))
+morphogen$KO3<-as.numeric(gsub(",", ".", morphogen$KO3))
+morphogen$KO4<-as.numeric(gsub(",", ".", morphogen$KO4))
+morphogen$KO5<-as.numeric(gsub(",", ".", morphogen$KO5))
+morphogen<- as.matrix(morphogen)
+morphogen.heatmap<- pheatmap(morphogen,cluster_cols = F, 
+                                           annotation_names_row = T, cluster_rows = F,
+                                           border_color = "white", 
+                                         cellwidth = 10,
+                                        cellheight = 10,
+                                         color = hcl.colors(80, "RdBu", rev=TRUE, fixup = T),
+                                       angle_col = 45, 
+                                       fontsize = 8, show_colnames = T, show_rownames = T, scale = "row"
+                                        )
+pdf("C:/Users/admin.ia1014/Documents/DOT1L-interneuron-development/110423_IN_morphogen_heatmap.pdf", 
+    width=4, 
+    height=4)
+print(morphogen.heatmap)
+dev.off()
+```
+
+```
+
